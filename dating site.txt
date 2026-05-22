@@ -1,0 +1,454 @@
+#!/usr/bin/env bash
+set -e
+
+# create directories
+mkdir -p components lib pages/api pages/blog content/posts styles public/images
+
+# write files
+cat > package.json <<'EOF'
+{
+  "name": "nextjs-mdx-starter",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && next export",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "date-fns": "^2.30.0",
+    "gray-matter": "^4.0.3",
+    "next": "13.5.6",
+    "next-mdx-remote": "^4.2.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "rss": "^1.2.2",
+    "sitemap": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.5.6",
+    "@types/react": "18.2.21",
+    "autoprefixer": "^10.4.14",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.4.6",
+    "typescript": "5.6.2"
+  }
+}
+EOF
+
+cat > tsconfig.json <<'EOF'
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "types": ["node"]
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "**/*.mdx"],
+  "exclude": ["node_modules"]
+}
+EOF
+
+cat > next.config.js <<'EOF'
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  images: { domains: [] },
+  experimental: { appDir: false }
+};
+module.exports = nextConfig;
+EOF
+
+cat > postcss.config.js <<'EOF'
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {}
+  }
+};
+EOF
+
+cat > tailwind.config.js <<'EOF'
+module.exports = {
+  content: ["./pages/**/*.{js,ts,jsx,tsx,mdx}", "./components/**/*.{js,ts,jsx,tsx,mdx}", "./content/**/*.{md,mdx}"],
+  theme: {
+    extend: {}
+  },
+  plugins: []
+};
+EOF
+
+cat > styles/globals.css <<'EOF'
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Simple defaults */
+html,body,#__next { height: 100%; }
+body { @apply bg-white text-slate-800 antialiased; }
+a { @apply text-sky-600 hover:text-sky-700; }
+.container { max-width: 1024px; margin-left: auto; margin-right: auto; padding-left: 1rem; padding-right: 1rem; }
+EOF
+
+cat > pages/_app.tsx <<'EOF'
+import '../styles/globals.css';
+import type { AppProps } from 'next/app';
+import Layout from '../components/Layout';
+
+export default function MyApp({ Component, pageProps }: AppProps) {
+  return (
+    <Layout>
+      <Component {...pageProps} />
+    </Layout>
+  );
+}
+EOF
+
+cat > components/Layout.tsx <<'EOF'
+import React from 'react';
+import Header from './Header';
+import Footer from './Footer';
+
+const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  return (
+    <div className="min-h-screen flex flex-col">
+      <Header />
+      <main className="flex-1 container py-10">{children}</main>
+      <Footer />
+    </div>
+  );
+};
+
+export default Layout;
+EOF
+
+cat > components/Header.tsx <<'EOF'
+import Link from 'next/link';
+
+export default function Header() {
+  return (
+    <header className="bg-white border-b">
+      <div className="container flex items-center justify-between py-4">
+        <Link href="/"><a className="text-xl font-semibold">SiteName</a></Link>
+        <nav className="space-x-4">
+          <Link href="/"><a>Home</a></Link>
+          <Link href="/about"><a>About</a></Link>
+          <Link href="/blog"><a>Blog</a></Link>
+          <Link href="/contact"><a>Contact</a></Link>
+        </nav>
+      </div>
+    </header>
+  );
+}
+EOF
+
+cat > components/Footer.tsx <<'EOF'
+export default function Footer() {
+  return (
+    <footer className="bg-slate-50 border-t">
+      <div className="container py-6 text-sm text-slate-600">
+        <div>© {new Date().getFullYear()} SiteName. Built with Next.js.</div>
+      </div>
+    </footer>
+  );
+}
+EOF
+
+cat > components/SEO.tsx <<'EOF'
+import Head from 'next/head';
+import React from 'react';
+
+type Props = {
+  title?: string;
+  description?: string;
+  url?: string;
+  image?: string;
+};
+
+export default function SEO({ title = 'SiteName', description = 'A Next.js site', url, image }: Props) {
+  return (
+    <Head>
+      <title>{title}</title>
+      <meta name="description" content={description} />
+      {url && <meta property="og:url" content={url} />}
+      <meta property="og:title" content={title} />
+      <meta property="og:description" content={description} />
+      {image && <meta property="og:image" content={image} />}
+      <meta name="twitter:card" content="summary_large_image" />
+    </Head>
+  );
+}
+EOF
+
+cat > lib/posts.ts <<'EOF'
+import fs from 'fs';
+import path from 'path';
+import matter from 'gray-matter';
+import { serialize } from 'next-mdx-remote/serialize';
+
+const postsDir = path.join(process.cwd(), 'content', 'posts');
+
+export type PostMeta = {
+  title: string;
+  date: string;
+  description?: string;
+  slug: string;
+  tags?: string[];
+};
+
+export async function getAllPosts(): Promise<PostMeta[]> {
+  const files = fs.readdirSync(postsDir).filter(f => f.endsWith('.mdx') || f.endsWith('.md'));
+  const posts = files.map(filename => {
+    const filePath = path.join(postsDir, filename);
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const { data } = matter(raw);
+    const slug = filename.replace(/\.mdx?$/, '');
+    return {
+      title: data.title || slug,
+      date: data.date || '1970-01-01',
+      description: data.description || '',
+      slug,
+      tags: data.tags || []
+    } as PostMeta;
+  }).sort((a,b) => (a.date < b.date ? 1 : -1));
+  return posts;
+}
+
+export async function getPostBySlug(slug: string) {
+  const fullPathMd = path.join(postsDir, `${slug}.mdx`);
+  const fullPath = fs.existsSync(fullPathMd) ? fullPathMd : null;
+  if (!fullPath) return null;
+  const source = fs.readFileSync(fullPath, 'utf8');
+  const { content, data } = matter(source);
+  const mdxSource = await serialize(content, { scope: data });
+  return { meta: { title: data.title, date: data.date, description: data.description, tags: data.tags || [] }, mdxSource };
+}
+EOF
+
+cat > pages/index.tsx <<'EOF'
+import Link from 'next/link';
+import SEO from '../components/SEO';
+import { getAllPosts } from '../lib/posts';
+import { GetStaticProps } from 'next';
+
+type Props = { posts: { title: string; date: string; slug: string; description?: string }[] };
+
+export default function Home({ posts }: Props) {
+  return (
+    <>
+      <SEO title="Home — SiteName" description="Welcome to SiteName" />
+      <section className="container">
+        <h1 className="text-3xl font-bold mb-4">Welcome</h1>
+        <p className="mb-6">Starter Next.js + MDX site.</p>
+
+        <h2 className="text-2xl font-semibold mb-3">Recent posts</h2>
+        <ul className="space-y-4">
+          {posts.map(p => (
+            <li key={p.slug} className="border rounded p-4">
+              <Link href={`/blog/${p.slug}`}><a className="text-xl font-medium">{p.title}</a></Link>
+              <div className="text-sm text-slate-500">{p.date}</div>
+              {p.description && <p className="mt-2 text-slate-700">{p.description}</p>}
+            </li>
+          ))}
+        </ul>
+      </section>
+    </>
+  );
+}
+
+export const getStaticProps: GetStaticProps = async () => {
+  const posts = await getAllPosts();
+  return { props: { posts } };
+};
+EOF
+
+cat > pages/about.tsx <<'EOF'
+import SEO from '../components/SEO';
+
+export default function About() {
+  return (
+    <>
+      <SEO title="About — SiteName" description="About this site" />
+      <div>
+        <h1 className="text-3xl font-bold mb-4">About</h1>
+        <p>This is a starter site built with Next.js, TypeScript, Tailwind CSS and MDX.</p>
+      </div>
+    </>
+  );
+}
+EOF
+
+cat > pages/contact.tsx <<'EOF'
+import { useState } from 'react';
+import SEO from '../components/SEO';
+
+export default function Contact() {
+  const [state, setState] = useState({ name: '', email: '', message: '', status: '' });
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setState(s => ({ ...s, status: 'sending' }));
+    const res = await fetch('/api/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: state.name, email: state.email, message: state.message })
+    });
+    if (res.ok) setState({ name: '', email: '', message: '', status: 'sent' });
+    else setState(s => ({ ...s, status: 'error' }));
+  }
+
+  return (
+    <>
+      <SEO title="Contact — SiteName" description="Contact page" />
+      <div className="max-w-xl">
+        <h1 className="text-2xl font-bold mb-4">Contact</h1>
+        <form onSubmit={submit} className="space-y-4">
+          <label className="block">
+            <div className="text-sm font-medium">Name</div>
+            <input value={state.name} onChange={e => setState(s => ({ ...s, name: e.target.value }))} className="mt-1 block w-full border rounded px-3 py-2" required />
+          </label>
+          <label className="block">
+            <div className="text-sm font-medium">Email</div>
+            <input type="email" value={state.email} onChange={e => setState(s => ({ ...s, email: e.target.value }))} className="mt-1 block w-full border rounded px-3 py-2" required />
+          </label>
+          <label className="block">
+            <div className="text-sm font-medium">Message</div>
+            <textarea value={state.message} onChange={e => setState(s => ({ ...s, message: e.target.value }))} className="mt-1 block w-full border rounded px-3 py-2" rows={6} required />
+          </label>
+          <div>
+            <button type="submit" className="px-4 py-2 bg-sky-600 text-white rounded">{state.status === 'sending' ? 'Sending...' : 'Send'}</button>
+            {state.status === 'sent' && <span className="ml-3 text-green-600">Message sent.</span>}
+            {state.status === 'error' && <span className="ml-3 text-red-600">Error sending.</span>}
+          </div>
+        </form>
+      </div>
+    </>
+  );
+}
+EOF
+
+cat > pages/api/contact.ts <<'EOF'
+import type { NextApiRequest, NextApiResponse } from 'next';
+
+type Data = { ok: boolean; message?: string };
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
+  if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'Method not allowed' });
+  const { name, email, message } = req.body || {};
+  if (!name || !email || !message) return res.status(400).json({ ok: false, message: 'Missing fields' });
+
+  console.log('Contact form submitted:', { name, email, message });
+
+  return res.status(200).json({ ok: true });
+}
+EOF
+
+cat > pages/blog/index.tsx <<'EOF'
+import Link from 'next/link';
+import SEO from '../../components/SEO';
+import { getAllPosts } from '../../lib/posts';
+import { GetStaticProps } from 'next';
+
+export default function BlogIndex({ posts }: { posts: { title: string; date: string; slug: string; description?: string }[] }) {
+  return (
+    <>
+      <SEO title="Blog — SiteName" description="Blog posts" />
+      <div>
+        <h1 className="text-3xl font-bold mb-6">Blog</h1>
+        <ul className="space-y-4">
+          {posts.map(p => (
+            <li key={p.slug} className="border rounded p-4">
+              <Link href={`/blog/${p.slug}`}><a className="text-xl font-medium">{p.title}</a></Link>
+              <div className="text-sm text-slate-500">{p.date}</div>
+              {p.description && <p className="mt-2 text-slate-700">{p.description}</p>}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </>
+  );
+}
+
+export const getStaticProps: GetStaticProps = async () => {
+  const posts = await getAllPosts();
+  return { props: { posts } };
+};
+EOF
+
+cat > pages/blog/[slug].tsx <<'EOF'
+import { GetStaticPaths, GetStaticProps } from 'next';
+import { getAllPosts, getPostBySlug } from '../../lib/posts';
+import { MDXRemote } from 'next-mdx-remote';
+import SEO from '../../components/SEO';
+
+export default function PostPage({ mdxSource, meta }: any) {
+  if (!mdxSource) return <div>Not found</div>;
+  return (
+    <>
+      <SEO title={`${meta.title} — SiteName`} description={meta.description} />
+      <article className="max-w-3xl">
+        <h1 className="text-3xl font-bold mb-2">{meta.title}</h1>
+        <div className="text-sm text-slate-500 mb-6">{meta.date}</div>
+        <div className="prose">
+          <MDXRemote {...mdxSource} />
+        </div>
+      </article>
+    </>
+  );
+}
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const posts = await getAllPosts();
+  const paths = posts.map(p => ({ params: { slug: p.slug } }));
+  return { paths, fallback: false };
+};
+
+export const getStaticProps: GetStaticProps = async ({ params }) => {
+  const slug = params?.slug as string;
+  const post = await getPostBySlug(slug);
+  if (!post) return { notFound: true };
+  return { props: { mdxSource: post.mdxSource, meta: { ...post.meta, slug } } };
+};
+EOF
+
+cat > content/posts/hello-world.mdx <<'EOF'
+---
+title: "Hello World"
+date: "2026-05-22"
+description: "First post in the starter blog"
+---
+
+# Hello, world!
+
+This is a sample MDX post. You can write Markdown and embed React components when needed.
+EOF
+
+cat > README.md <<'EOF'
+# Next.js MDX Starter
+
+Run locally:
+1. npm install
+2. npm run dev
+Open http://localhost:3000
+
+Build:
+npm run build
+
+Notes:
+- Add real email provider logic in pages/api/contact.ts using env vars.
+- Deploy to Vercel by connecting your GitHub repo.
+EOF
+
+echo "Created starter files. Run 'npm install' then 'npm run dev'."
